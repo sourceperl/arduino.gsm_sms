@@ -118,7 +118,6 @@ void setup()
     gsm_modem.flush();
     gsm_modem.print(F("AT\r"));
     if (gsm_modem.find("OK")) {
-      //delay_idle(1500);
       break;
     }  
     // large pulse on PWRKEY for switch Quectel M10 chip on at startup
@@ -130,6 +129,7 @@ void setup()
   snprintf_P(txt_buffer, sizeof(txt_buffer), PSTR("INIT GSM OK"));
   lcd_line(1, txt_buffer);  
   printf_P(PSTR("%s\n"), txt_buffer);
+  delay_idle(4000);  
   // set modem in text mode (instead of PDU mode)
   gsm_modem.setTimeout(8000);
   gsm_modem.flush();
@@ -308,12 +308,6 @@ void jobLCD(void)
 // job "SMS receive polling"
 void jobRxSMS(void) 
 {
-  // local var
-  /* int sms_index;
-  char sms_status[16];
-  char sms_phonenumber[16]; 
-  char sms_datetime[25];
-  char sms_msg[161];*/
   // check SMS index
   printf_P(PSTR("get_last_SMS_index()\n"));
   sms.index = get_last_SMS_index();
@@ -459,6 +453,7 @@ int get_RSSI(void)
   gsm_modem.find("\r\nOK\r\n");
   return g_rssi;
 }
+
 
 // print msg on line nb of the LCD
 // pad the line with space char for ensure 16 chars wide
