@@ -4,7 +4,7 @@
   This example code is in the public domain.
   Share, it's happiness !
 
-  Note : average consumption 30 ma on 12VDC.
+  Note : average consumption 35 ma on 12VDC.
   With cards : OLIMEXINO-328 (! 5V select !), official Arduino GSM shield, Adafruit RGB LCD shield.
 */
 
@@ -27,11 +27,11 @@
 // some const
 #define SMS_CHECK_INTERVAL   30000
 #define STAT_UPDATE_INTERVAL  5000
-#define LCD_UPDATE_INTERVAL    150
+#define LCD_UPDATE_INTERVAL    100
 #define M10_PWRKEY_PIN 7
 #define TEST_LED 13
 #define TC_PIN "1111"
-#define VERSION "0.2"
+#define VERSION "0.3"
 #define LCD_BL_OFF    0x0
 #define LCD_BL_RED    0x1
 #define LCD_BL_YELLOW 0x3
@@ -40,6 +40,15 @@
 #define LCD_BL_BLUE   0x4
 #define LCD_BL_VIOLET 0x5
 #define LCD_BL_WHITE  0x7 
+
+// some struct
+struct st_SMS {
+   int index;
+  char status[16];
+  char phonenumber[16]; 
+  char datetime[25];
+  char msg[161];
+};
 
 // some vars
 SoftwareSerial gsm_modem(2, 3); // RX, TX
@@ -53,14 +62,16 @@ char tx_buf[64];
 byte rx_index = 0;
 byte tx_index = 0;
 int rssi = 0;  
-int bar  = 0;
+byte bar  = 0;
 unsigned int sms_counter = 0;
 boolean lcd_bl_on = false;
 unsigned long lcd_bl_on_t;
 byte alive = 0;
+char txt_buffer[128];
+st_SMS sms;
 
 // link stdout (printf) to Serial object
-// create a FILE structure to reference our UART output function
+// create a FILE structure to reference our UART and LCD output function
 static FILE uartout = {0};
 
 // create a output function
@@ -94,50 +105,55 @@ void setup()
   // set up the LCD's number of columns and rows:
   lcd.begin(16, 2);
   // start message
-  print_RAM_map();
-  lcd_line(0, "tinyRTU V" VERSION);
-  lcd_line(1, "INIT GSM CHIPSET"); 
-  printf_P(PSTR("init gsm chipset\n"));
+  snprintf_P(txt_buffer, sizeof(txt_buffer), PSTR("tinyRTU V%s"), VERSION);
+  lcd_line(0, txt_buffer);
+  printf_P(PSTR("%s\n"), txt_buffer);
+  snprintf_P(txt_buffer, sizeof(txt_buffer), PSTR("INIT GSM CHIPSET"));
+  lcd_line(1, txt_buffer); 
+  printf_P(PSTR("%s\n"), txt_buffer);
   // check if gsm chip is on
   while(1) {
     // wait GSM chipset init
-    delay(600);
+    delay_idle(600);
     gsm_modem.flush();
     gsm_modem.print(F("AT\r"));
     if (gsm_modem.find("OK")) {
-      delay(1500);
+      //delay_idle(1500);
       break;
     }  
     // large pulse on PWRKEY for switch Quectel M10 chip on at startup
     digitalWrite(M10_PWRKEY_PIN, HIGH);
-    delay(2100);
+    delay_idle(2100);
     digitalWrite(M10_PWRKEY_PIN, LOW);
-    delay(500);
+    delay_idle(500);
   }
-  lcd_line(1, "INIT GSM OK");  
-  printf_P(PSTR("init ok\n"));
+  snprintf_P(txt_buffer, sizeof(txt_buffer), PSTR("INIT GSM OK"));
+  lcd_line(1, txt_buffer);  
+  printf_P(PSTR("%s\n"), txt_buffer);
   // set modem in text mode (instead of PDU mode)
   gsm_modem.setTimeout(8000);
   gsm_modem.flush();
   gsm_modem.print(F("AT+CMGF=1\r"));
   if (! gsm_modem.find("OK")) {
-    lcd_line(1, "ERR: SMS TXT MOD");
+    snprintf_P(txt_buffer, sizeof(txt_buffer), PSTR("ERR: SMS TXT MOD"));
+    lcd_line(1, txt_buffer);
+    printf_P("%s\n", txt_buffer);
     // loop forever
     while(1)
       cpu_idle();
   }
   // delete all SMS
-  printf_P(PSTR("flush all pending SMS\n"));
   // flush serial buffer
   gsm_modem.flush();
   // delete all messages
   gsm_modem.print(F("AT+CMGD=0,4\r"));
   // check result
   if (gsm_modem.find("\r\nOK\r\n")) {
-    printf_P(PSTR("flush ok\n"));
+    printf_P(PSTR("FLUSH SMS OK\n"));
   } else {
-    printf_P(PSTR("flush error\n"));
-    lcd_line(1, "ERR: flush SMS");
+    snprintf_P(txt_buffer, sizeof(txt_buffer), PSTR("ERR: flush SMS"));
+    lcd_line(1, txt_buffer);
+    printf_P("%s\n", txt_buffer);
     // loop forever
     while(1)
       cpu_idle();
@@ -146,7 +162,7 @@ void setup()
   gsm_modem.flush();
   gsm_modem.print(F("ATE0\r"));
   if (gsm_modem.find("\r\nOK\r\n"))
-    printf_P(PSTR("echo local off\n"));
+    printf_P(PSTR("ECHO LOCAL: OFF\n"));
   // init timer job (after instead of every for regulary call delay)
   job_sms  = t.after(SMS_CHECK_INTERVAL,   jobRxSMS);
   job_stat = t.after(STAT_UPDATE_INTERVAL, jobSTAT);
@@ -164,9 +180,8 @@ void loop()
   while(gsm_modem.available()) {
     // check incoming char
     int c = gsm_modem.read();
-    if (c != 0) {
-      rx_buf[rx_index] = c; 
-    }  
+    if (c != 0)
+      rx_buf[rx_index] = c;
     // send data ?
     if (c == '\n') {
       // search notice message
@@ -178,8 +193,8 @@ void loop()
         printf_P(PSTR("rx: "));
         byte i;
         for (i = 0; i <= rx_index; i++)
-           printf_P(PSTR("%02x[%c] "), rx_buf[i], (rx_buf[i] > 0x20) ? rx_buf[i] : ' ');
-         printf_P(PSTR("\n"));
+          printf_P(PSTR("%02x[%c] "), rx_buf[i], (rx_buf[i] > 0x20) ? rx_buf[i] : ' ');
+        printf_P(PSTR("\n"));
       }
        rx_index = 0;
        memset(rx_buf, 0, sizeof(rx_buf));
@@ -193,14 +208,19 @@ void loop()
   while(Serial.available()) {
     // check incoming char
     int c = Serial.read();
-    if (c != 0) {
+    if (c != 0)
       tx_buf[tx_index] = c; 
-    }
     // send data ?
     if (c == '\n') {
       // set "dump" command : print RAM map
-      if (strncmp(tx_buf, "dump", 4) == 0) {
+      if (strncmp(tx_buf, "DUMP", 4) == 0) {
         print_RAM_map();
+      // set "rssi" command : print signal level
+      } else if (strncmp(tx_buf, "RSSI", 4) == 0) {
+        if (rssi != 0)
+          printf_P(PSTR("lvl:%04d dbm %d\n"), rssi, bar);
+        else
+          printf_P(PSTR("lvl: n/a\n"));
       } else {
         // display string like: "tx: 41[A] 54[T] 0a[ ]"
         printf_P(PSTR("tx: "));
@@ -220,8 +240,8 @@ void loop()
         tx_index++;
     }    
   }
-  // set IDLE mode (wake up by millis() timer0 overflow)
-  cpu_idle();
+  // set IDLE mode for 20 ms
+  delay_idle(20);
 }
 
 // *** jobs rotines ***
@@ -276,12 +296,12 @@ void jobLCD(void)
   // line 1 : RSSI level
   if (rssi != 0) {
     // display RSSI on LCD panel  
-    sprintf_P(buf, PSTR("lvl:%04d dbm %d %d"), rssi, bar, alive);
-    lcd_line(1, buf);
+    snprintf_P(txt_buffer, sizeof(txt_buffer), PSTR("lvl:%04d dbm %d %d"), rssi, bar, alive);
+    lcd_line(1, txt_buffer);
   } else {
     // if data not available  
-    sprintf_P(buf, PSTR("lvl: n/a       %d"), alive);
-    lcd_line(1, buf);    
+    snprintf_P(txt_buffer, sizeof(txt_buffer), PSTR("lvl: n/a       %d"), alive);
+    lcd_line(1, txt_buffer);    
   }
 }
 
@@ -289,44 +309,46 @@ void jobLCD(void)
 void jobRxSMS(void) 
 {
   // local var
-   int sms_index;
+  /* int sms_index;
   char sms_status[16];
   char sms_phonenumber[16]; 
   char sms_datetime[25];
-  char sms_msg[161];
-  char txt_buffer[128];
+  char sms_msg[161];*/
   // check SMS index
   printf_P(PSTR("get_last_SMS_index()\n"));
-  sms_index = get_last_SMS_index();
-  if (sms_index > 0) {
+  sms.index = get_last_SMS_index();
+  if (sms.index > 0) {
     sms_counter++;
     // read SMS
     printf_P(PSTR("get_SMS\n"));
-    if (get_SMS(sms_index, sms_status, sms_phonenumber, sms_datetime, sms_msg)) {
-      printf_P(PSTR("%s\n"), sms_index);
-      printf_P(PSTR("%s\n"), sms_status);
-      printf_P(PSTR("%s\n"), sms_phonenumber);
-      printf_P(PSTR("%s\n"), sms_datetime);
-      printf_P(PSTR("%s\n"), sms_msg);
+    //if (get_SMS(sms_index, sms_status, sms_phonenumber, sms_datetime, sms_msg)) {
+    if (get_SMS(sms.index)) {
+      printf_P(PSTR("%s\n"), sms.index);
+      printf_P(PSTR("%s\n"), sms.status);
+      printf_P(PSTR("%s\n"), sms.phonenumber);
+      printf_P(PSTR("%s\n"), sms.datetime);
+      printf_P(PSTR("%s\n"), sms.msg);
       // decode SMS
       // sms must begin with xxxx where x is security code
-      if (strncmp(sms_msg, TC_PIN, 4) == 0) {
-        if (strucasestr(sms_msg, "LED")) {
+      if (strncmp(sms.msg, TC_PIN, 4) == 0) {
+        if (strucasestr(sms.msg, "LED")) {
           digitalWrite(TEST_LED, ! digitalRead(TEST_LED));
-          sprintf_P(txt_buffer, PSTR("SMS: TC LED [%d]"), digitalRead(TEST_LED));
+          snprintf_P(txt_buffer, sizeof(txt_buffer), PSTR("SMS: TC LED [%d]"), digitalRead(TEST_LED));
+          printf_P(PSTR("%s\n"), txt_buffer);
+          lcd_line(0, txt_buffer); 
+          snprintf_P(txt_buffer, sizeof(txt_buffer), PSTR("%s\n%s\nLED=%d\n"), "TinyRTU", "TC status", digitalRead(TEST_LED));
+          send_SMS(sms.phonenumber, txt_buffer);
+        } else if (strucasestr(sms.msg, "INFO")) {
+          snprintf_P(txt_buffer, sizeof(txt_buffer), PSTR("SMS: MSG INFO"));
           printf_P(PSTR("%s\n"), txt_buffer);
           lcd_line(0, txt_buffer);
-          sprintf_P(txt_buffer, PSTR("%s\n%s\nLED=%d\n"), "TinyRTU", "TC status", digitalRead(TEST_LED));
-          send_SMS(sms_phonenumber, txt_buffer);
-        } else if (strucasestr(sms_msg, "INFO")) {
-          printf_P(PSTR("SMS: MSG INFO\n"));
-          lcd_line(0, "SMS: MSG INFO");
-          sprintf_P(txt_buffer, PSTR("%s\n%s\nup=%lu s\nrssi=%04d dbm\nsms=%d"), "TinyRTU", "Uptime (in s)", millis()/1000, rssi, sms_counter);
-          send_SMS(sms_phonenumber, txt_buffer);          
+          snprintf_P(txt_buffer, sizeof(txt_buffer), PSTR("%s\n%s\nup=%lu s\nrssi=%04d dbm\nsms=%d"), "TinyRTU", "Uptime (in s)", millis()/1000, rssi, sms_counter);
+          send_SMS(sms.phonenumber, txt_buffer);          
         }
       } else {
-        printf_P(PSTR("PIN error\n"));
-        lcd_line(0, "SMS: PIN ERR");
+        snprintf_P(txt_buffer, sizeof(txt_buffer), PSTR("SMS: PIN ERR"));
+        printf_P(PSTR("%s\n"), txt_buffer);
+        lcd_line(0, txt_buffer);
       }
     }
     // delete SMS
@@ -384,32 +406,33 @@ int get_last_SMS_index(void)
 
 // read sms equal to sms_index in chip memory
 // return status, phonenumber, datetime and msg.
-int get_SMS(int sms_index, char *sms_status, char *sms_phonenumber, char *sms_datetime, char *sms_msg) 
+int get_SMS(int index) 
 {
   // init args
-  memset(sms_status, 0, 16);
-  memset(sms_phonenumber, 0, 16);
-  memset(sms_datetime, 0, 25);
-  memset(sms_msg, 0, 128);
+  sms.index = index;
+  memset(sms.status, 0, 16);
+  memset(sms.phonenumber, 0, 16);
+  memset(sms.datetime, 0, 25);
+  memset(sms.msg, 0, 128);
   // flush serial buffer
   gsm_modem.flush();
   // AT+CMGR=1\r
   gsm_modem.print(F("AT+CMGR="));
-  gsm_modem.print(sms_index);
+  gsm_modem.print(sms.index);
   gsm_modem.print(F("\r"));
   // parse result
   // +CMGR: "REC READ","+33123456789","","2013/06/29 11:23:35+08"
   if (! gsm_modem.findUntil("+CMGR:", "OK")) 
     return 0; 
   gsm_modem.find("\"");
-  gsm_modem.readBytesUntil('"', sms_status, 15);
+  gsm_modem.readBytesUntil('"', sms.status, sizeof(sms.status)-1);
   gsm_modem.find(",\"");
-  gsm_modem.readBytesUntil('"', sms_phonenumber, 15);  
+  gsm_modem.readBytesUntil('"', sms.phonenumber, sizeof(sms.phonenumber)-1);  
   gsm_modem.find(",\""); 
   gsm_modem.find("\",\"");
-  gsm_modem.readBytesUntil('"', sms_datetime, 24);
+  gsm_modem.readBytesUntil('"', sms.datetime, sizeof(sms.datetime)-1);
   gsm_modem.find("\r\n");
-  gsm_modem.readBytesUntil('\r', sms_msg, 127);
+  gsm_modem.readBytesUntil('\r', sms.msg, sizeof(sms.msg)-1);
   return 1;  
 }
 
@@ -469,7 +492,8 @@ char *strucasestr(char *str1, char *str2)
 // don't disable timer0 use for millis()
 // timer0 overflow ISR occur every 256 x 64 clock cyle
 // -> for 16 MHz clock every 1,024 ms, this wake up the "uc" from idle sleep
-void cpu_idle(void) {
+void cpu_idle(void)
+{
   sleep_enable();
   set_sleep_mode(SLEEP_MODE_IDLE);
   power_adc_disable();
@@ -480,6 +504,14 @@ void cpu_idle(void) {
   sleep_mode(); // go sleep here
   sleep_disable(); 
   power_all_enable();
+}
+
+// set cpu in idle mode for ms milliseconds
+void delay_idle(unsigned long ms)
+{
+  unsigned long _now = millis();
+  while (millis() - _now < ms)
+    cpu_idle();
 }
 
 // DEBUG
